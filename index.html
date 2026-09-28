@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chart Analyzer</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Charts">
+<meta name="theme-color" content="#0e1116">
+<style>
+  :root { --bg:#0e1116; --card:#171b22; --fg:#e8eaed; --mute:#8b93a1; --line:#262c36;
+          --buy:#22c55e; --sell:#ef4444; --accent:#3b82f6; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f4f5f7; --card:#fff; --fg:#14171c; --mute:#5b6472; --line:#e1e4ea; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width:640px; margin:0 auto; padding:16px; }
+  h1 { font-size:1.3rem; margin:8px 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+  label { display:block; font-size:.8rem; color:var(--mute); margin:10px 0 4px; }
+  input, select, textarea, button { width:100%; font:inherit; color:inherit; background:transparent;
+         border:1px solid var(--line); border-radius:8px; padding:10px; }
+  select option { color:#000; }
+  .row { display:flex; gap:10px; } .row > div { flex:1; }
+  #drop { border:2px dashed var(--line); border-radius:12px; padding:22px; text-align:center;
+          color:var(--mute); cursor:pointer; }
+  #preview { max-width:100%; border-radius:8px; margin-top:10px; display:none; }
+  button.primary { background:var(--accent); border:none; color:#fff; font-weight:600; margin-top:14px; }
+  button:disabled { opacity:.5; }
+  .badge { display:inline-block; padding:4px 12px; border-radius:999px; font-weight:700; color:#fff; }
+  .buy { background:var(--buy); } .sell { background:var(--sell); } .none { background:var(--mute); }
+  .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:12px 0; text-align:center; }
+  .grid div { border:1px solid var(--line); border-radius:8px; padding:8px 2px; }
+  .grid small { display:block; color:var(--mute); font-size:.7rem; }
+  ul { padding-left:20px; margin:6px 0; }
+  .warn { font-size:.8rem; color:var(--mute); }
+  .err { color:var(--sell); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Chart Analyzer</h1>
+
+  <div class="card">
+    <div id="drop">Tap to choose a screenshot, or paste one (Ctrl/Cmd+V)</div>
+    <input type="file" id="file" accept="image/*" hidden>
+    <img id="preview" alt="chart preview">
+
+    <div class="row">
+      <div><label>Symbol (optional)</label><input id="symbol" placeholder="XAUUSD"></div>
+      <div><label>Timeframe (optional)</label><input id="tf" placeholder="M5"></div>
+    </div>
+    <label>Strategy</label>
+    <select id="strategy">
+      <option value="auto">Auto (best fit)</option>
+      <option value="smc">SMC</option>
+      <option value="break_retest">Break and retest</option>
+      <option value="silver_bullet">ICT Silver Bullet</option>
+      <option value="range">Range (support/resistance)</option>
+      <option value="fib">Fibonacci retracement</option>
+    </select>
+    <label>Access code (if your host set one)</label>
+    <input id="code" type="password" autocomplete="off" placeholder="leave blank if none">
+    <label>Notes (optional)</label>
+    <textarea id="notes" rows="2" placeholder="e.g. London session, bias is bullish on H4"></textarea>
+    <button class="primary" id="go" disabled>Analyze chart</button>
+  </div>
+
+  <div id="out"></div>
+  <p class="warn">Not financial advice. Levels are read from a picture and can be wrong, so check them against your platform before placing any order.</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let blob = null;
+try { $("code").value = localStorage.getItem("code") || ""; } catch (e) {}
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
+
+function setImage(f) {
+  blob = f;
+  $("preview").src = URL.createObjectURL(f);
+  $("preview").style.display = "block";
+  $("go").disabled = false;
+}
+$("drop").onclick = () => $("file").click();
+$("file").onchange = e => e.target.files[0] && setImage(e.target.files[0]);
+window.addEventListener("paste", e => {
+  for (const it of e.clipboardData.items)
+    if (it.type.startsWith("image/")) setImage(it.getAsFile());
+});
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const li = a => (a || []).map(x => `<li>${esc(x)}</li>`).join("");
+
+$("go").onclick = async () => {
+  $("go").disabled = true; $("go").textContent = "Analyzing...";
+  $("out").innerHTML = "";
+  const fd = new FormData();
+  fd.append("image", blob, "chart.png");
+  fd.append("symbol", $("symbol").value);
+  fd.append("timeframe", $("tf").value);
+  fd.append("strategy", $("strategy").value);
+  fd.append("notes", $("notes").value);
+  try {
+    try { localStorage.setItem("code", $("code").value); } catch (e) {}
+    const r = await fetch("/analyze", { method: "POST", body: fd, headers: { "X-Access-Code": $("code").value } });
+    const p = await r.json();
+    if (!r.ok) throw new Error(p.error || "Request failed");
+    const cls = p.decision === "buy" ? "buy" : p.decision === "sell" ? "sell" : "none";
+    const label = p.decision === "no_trade" ? "NO TRADE" : p.decision.toUpperCase();
+    $("out").innerHTML = `<div class="card">
+      <span class="badge ${cls}">${label}</span>
+      <span class="warn"> ${esc(p.strategy_used)} · ${esc(p.symbol_timeframe_read)} · confidence: ${esc(p.confidence)}</span>
+      ${p.decision !== "no_trade" ? `<div class="grid">
+        <div><small>Entry</small>${esc(p.entry)}</div>
+        <div><small>Stop loss</small>${esc(p.sl)}</div>
+        <div><small>Take profit</small>${esc(p.tp)}</div>
+        <div><small>RR</small>${esc(p.rr)}</div></div>` : ""}
+      <b>Why</b><ul>${li(p.reasons)}</ul>
+      <b>Invalidation</b><p>${esc(p.invalidation)}</p>
+      <b>Risks</b><ul>${li(p.risks)}</ul></div>`;
+  } catch (e) {
+    $("out").innerHTML = `<div class="card err">${esc(e.message)}</div>`;
+  }
+  $("go").disabled = false; $("go").textContent = "Analyze chart";
+};
+</script>
+</body>
+</html>
